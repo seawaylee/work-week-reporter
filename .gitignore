@@ -1,0 +1,14 @@
+# Secrets and local env
+.env
+
+# Runtime artifacts
+logs/
+*.log
+
+# Data/report outputs
+周报*.xlsx
+tianxiangtai_response.json
+
+# Python
+__pycache__/
+*.pyc
