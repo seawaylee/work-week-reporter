@@ -1,5 +1,8 @@
 # Secrets and local env
 .env
+.env.local
+.env.*
+!.env.example
 
 # Runtime artifacts
 logs/
@@ -7,6 +10,7 @@ logs/
 
 # Data/report outputs
 周报*.xlsx
+~$*.xlsx
 tianxiangtai_response.json
 
 # Python

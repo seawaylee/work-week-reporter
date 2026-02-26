@@ -3,6 +3,7 @@ import requests
 import json
 import openpyxl
 import os
+import sys
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from copy import copy
 from datetime import datetime, timedelta
@@ -62,6 +63,8 @@ GRAFANA_MAPPING = {
     'odin-author': 'umab-odin-author-interface'
 }
 
+ANOMALY_FILL = PatternFill(start_color="FFF4CCCC", end_color="FFF4CCCC", fill_type="solid")
+
 def fetch_txt_data():
     """从天象台 API 获取数据"""
     print("Fetching Tianxiangtai data...")
@@ -88,10 +91,85 @@ def fetch_grafana_data(app_name, start_ts, end_ts):
     body = get_grafana_body(app_name, start_ts, end_ts)
     response = requests.post(GRAFANA_URL, headers=GRAFANA_HEADERS, data=body, verify=False)
     if response.status_code != 200:
-        # Don't crash, just return None/Log
         print(f"Grafana API Failed for {app_name}: {response.text}")
-        return {}
-    return response.json()
+        try:
+            data = response.json()
+        except Exception:
+            data = {"message": response.text}
+        data["_http_status"] = response.status_code
+        return data
+    try:
+        return response.json()
+    except Exception:
+        return {"message": "invalid_json_response", "_http_status": response.status_code}
+
+
+def parse_grafana_max_qps(raw):
+    """Extract max QPS from Grafana response."""
+    if not isinstance(raw, dict):
+        return None, "invalid_response"
+
+    status_code = raw.get("_http_status")
+    message = str(raw.get("message", "")).strip().lower()
+    if status_code == 401 or "unauthorized" in message:
+        return None, "unauthorized"
+
+    series = raw.get("data", {}).get("result", [])
+    if not series:
+        return None, "no_data"
+
+    values = series[0].get("values", [])
+    if not values:
+        return None, "no_data"
+
+    try:
+        max_qps_val = max(float(x[1]) for x in values)
+    except Exception:
+        return None, "parse_error"
+
+    return max_qps_val, None
+
+
+def write_qps_value(ws, row, col, qps_val):
+    """Always write QPS cell to avoid stale carried-over values."""
+    ws.cell(row=row, column=col).value = int(qps_val) if qps_val is not None else None
+
+
+def to_number(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return None
+    s = s.replace(",", "")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def is_large_change(current_value, previous_value, threshold=0.5):
+    """Return True when relative change is strictly greater than threshold."""
+    current_num = to_number(current_value)
+    previous_num = to_number(previous_value)
+    if current_num is None or previous_num is None or previous_num == 0:
+        return False
+    change = abs(current_num - previous_num) / abs(previous_num)
+    return change > threshold
+
+
+def apply_anomaly_fill(cell, current_value, previous_value):
+    if is_large_change(current_value, previous_value):
+        cell.fill = copy(ANOMALY_FILL)
+    else:
+        cell.fill = PatternFill(fill_type=None)
+
+
+def clear_annotation_cell(ws, row, col_start):
+    # Column +5 is the note/reason column; always clear for newly written week.
+    ws.cell(row=row, column=col_start + 5).value = None
 
 def parse_txt_data(raw_data):
     """解析天象台数据为字典 {ProfileID: {DateStr: Metrics}}"""
@@ -221,7 +299,7 @@ def process_report():
     if missing:
         print(f"Missing required env vars: {', '.join(missing)}")
         print("Set env vars first, then rerun.")
-        return
+        return 2
 
     # 1. 获取数据
     try:
@@ -230,7 +308,7 @@ def process_report():
         print(f"Loaded {len(txt_data)} profiles. Latest Date: {latest_api_date}")
     except Exception as e:
         print(f"Error fetching TXT data: {e}")
-        return
+        return 1
 
     # 2. 加载 Excel
     try:
@@ -239,7 +317,7 @@ def process_report():
         print(f"Loaded Excel: {INPUT_FILE}")
     except Exception as e:
         print(f"Error loading Excel: {e}")
-        return
+        return 1
 
     # 3. 构造显示用日期字符串
     sample_metric = next(iter(txt_data.values())).get(latest_api_date)
@@ -255,6 +333,7 @@ def process_report():
 
     # 获取 Grafana QPS (Pre-fetch all services)
     grafana_qps_map = {}
+    grafana_errors = {}
     try:
         dt_obj = datetime.strptime(latest_api_date, "%Y%m%d")
         end_dt_obj = datetime.strptime(to_dt, "%Y%m%d")
@@ -265,14 +344,13 @@ def process_report():
         print("Fetching Grafana data for all mapped services...")
         for svc_name, app_name in GRAFANA_MAPPING.items():
              grafana_raw = fetch_grafana_data(app_name, ts_start, ts_end)
-             qps_series = grafana_raw.get('data', {}).get('result', [])
-             if qps_series:
-                values = qps_series[0]['values']
-                max_qps_val = max([float(x[1]) for x in values])
+             max_qps_val, err = parse_grafana_max_qps(grafana_raw)
+             if err:
+                grafana_errors[svc_name] = err
+                print(f"  {svc_name}: {err}")
+             else:
                 grafana_qps_map[svc_name] = max_qps_val
                 print(f"  {svc_name}: {max_qps_val}")
-             else:
-                print(f"  {svc_name}: No data")
 
     except Exception as e:
         print(f"Error fetching Grafana: {e}")
@@ -356,23 +434,45 @@ def process_report():
         # Odin-series use Grafana QPS if available
         # Check mapping for exact name, or lower case
         qps_val = grafana_qps_map.get(name)
-        if not qps_val:
+        if qps_val is None:
             # try lower
              qps_val = grafana_qps_map.get(name.lower())
 
-        if qps_val:
-             ws.cell(row=target_row_idx, column=c_start+1).value = int(qps_val)
+        write_qps_value(ws, target_row_idx, c_start+1, qps_val)
+        prev_qps = ws.cell(row=prev_row_idx, column=c_start+1).value if prev_row_idx >= r_start else None
+        apply_anomaly_fill(ws.cell(row=target_row_idx, column=c_start+1), ws.cell(row=target_row_idx, column=c_start+1).value, prev_qps)
+        if qps_val is None and name in GRAFANA_MAPPING:
+            print(f"Warning: missing QPS for {name}; cleared QPS cell.")
 
         # 核心逻辑修改：强制取整
-        ws.cell(row=target_row_idx, column=c_start+2).value = int(new_metrics['p99'])
-        ws.cell(row=target_row_idx, column=c_start+3).value = int(new_metrics['p999'])
+        p99_val = int(new_metrics['p99'])
+        p999_val = int(new_metrics['p999'])
+        req_val = new_metrics['requests']
+
+        ws.cell(row=target_row_idx, column=c_start+2).value = p99_val
+        ws.cell(row=target_row_idx, column=c_start+3).value = p999_val
         # Requests is already int
-        ws.cell(row=target_row_idx, column=c_start+4).value = new_metrics['requests']
+        ws.cell(row=target_row_idx, column=c_start+4).value = req_val
+
+        prev_p99 = ws.cell(row=prev_row_idx, column=c_start+2).value if prev_row_idx >= r_start else None
+        prev_p999 = ws.cell(row=prev_row_idx, column=c_start+3).value if prev_row_idx >= r_start else None
+        prev_req = ws.cell(row=prev_row_idx, column=c_start+4).value if prev_row_idx >= r_start else None
+        apply_anomaly_fill(ws.cell(row=target_row_idx, column=c_start+2), p99_val, prev_p99)
+        apply_anomaly_fill(ws.cell(row=target_row_idx, column=c_start+3), p999_val, prev_p999)
+        apply_anomaly_fill(ws.cell(row=target_row_idx, column=c_start+4), req_val, prev_req)
+
+        clear_annotation_cell(ws, target_row_idx, c_start)
 
         print(f"Updated {name} (Profile {pid})")
 
     wb.save(OUTPUT_FILE)
     print(f"\nSuccess! Report generated: {OUTPUT_FILE}")
+    if grafana_errors:
+        missing = ", ".join(sorted(grafana_errors.keys()))
+        print(f"Incomplete Grafana QPS data for: {missing}")
+        print("Please refresh Grafana cookie and rerun.")
+        return 4
+    return 0
 
 if __name__ == "__main__":
-    process_report()
+    raise SystemExit(process_report())
