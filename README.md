@@ -31,8 +31,11 @@ pip install pandas openpyxl requests
 export TXT_URL='https://txt.mptc.sohu-inc.com/data/api/board/aggregateData/get?...'
 export TXT_COOKIE='你的天象台 Cookie'
 export GRAFANA_COOKIE='grafana_session=...'
+export GRAFANA_USERNAME='your_grafana_username'
+export GRAFANA_PASSWORD='your_grafana_password'
 # 可选
 export GRAFANA_URL='https://grafana-m0ymy2z9.grafana.tencent-cloud.com/api/datasources/proxy/1/api/v1/query_range'
+export GRAFANA_URL_BASE='https://grafana-m0ymy2z9.grafana.tencent-cloud.com/api/datasources/proxy/1/api/v1'
 export GRAFANA_ORG_ID='1'
 ```
 
@@ -45,7 +48,7 @@ python3 generate_weekly_report.py
 
 5.  脚本将在当前目录下生成当天的周报，例如 `周报2026-02-10.xlsx`。
 
-## 定时任务（每周五 09:30）
+## 定时任务（每周五 09:00）
 
 项目已提供定时任务脚本与安装脚本：
 
@@ -61,18 +64,19 @@ python3 generate_weekly_report.py
 安装后会写入：
 
 ```cron
-30 9 * * 5 /Users/NikoBelic/app/git/week-reporter/scripts/weekly_report_job.sh >> /Users/NikoBelic/app/git/week-reporter/logs/weekly_report_cron.log 2>&1
+0 9 * * 5 /Users/NikoBelic/app/git/sohu-work/week-reporter/scripts/weekly_report_job.sh >> /Users/NikoBelic/app/git/sohu-work/week-reporter/logs/weekly_report_cron.log 2>&1
 ```
 
 ## OpenClaw 通知（sohu）
 
 `scripts/weekly_report_job.sh` 的行为：
 
-1. 执行 `generate_weekly_report.py`。
-2. 自动查找本次生成的 `周报*.xlsx`。
-3. 将 Excel 复制到 `~/.openclaw/workspace-sohu/inbox/week-reporter/`。
-4. 调用 OpenClaw 本地 agent：`sohu`。
-5. **无论执行成功还是失败，都会发送通知**（通知里包含状态、日志路径、Excel 路径）。
+1. 先使用 `.env.local` 中的 `GRAFANA_USERNAME`、`GRAFANA_PASSWORD`、`GRAFANA_URL_BASE` 登录 Grafana 根域名，并安全更新 `GRAFANA_COOKIE`。
+2. 登录成功后执行 `generate_weekly_report.py`；如果刷新 Cookie 失败，会在生成报表前直接退出。
+3. 自动查找本次生成的 `周报*.xlsx`。
+4. 将 Excel 复制到 `~/.openclaw/workspace-sohu/inbox/week-reporter/`。
+5. 调用 OpenClaw 本地 agent：`sohu`。
+6. **无论执行成功还是失败，都会发送通知**（通知里包含状态、日志路径、Excel 路径）。
 
 手动测试一次（不跑真实报表，仅测试通知链路）：
 
@@ -82,6 +86,6 @@ DRY_RUN=1 ./scripts/weekly_report_job.sh
 
 ## 维护说明
 
-*   **Cookie 过期**：如果运行报错 401/403，请在浏览器中登录天象台/Grafana，按 F12 抓取最新 Cookie，并更新对应环境变量（`TXT_COOKIE`、`GRAFANA_COOKIE`）。
+*   **Cookie 过期**：定时任务会在运行前自动刷新 `GRAFANA_COOKIE`。如果刷新失败，请检查 `.env.local` 中的 `GRAFANA_USERNAME`、`GRAFANA_PASSWORD`、`GRAFANA_URL_BASE`；天象台仍需手动维护 `TXT_COOKIE`。
 *   **新增服务**：如果需要监控新的服务，请在 `SERVICE_MAPPING` 和 `GRAFANA_MAPPING` 字典中添加相应的映射关系。
 *   **OpenClaw 不可用**：先检查 `openclaw agent --local --agent sohu --message "ping"` 是否可执行，再检查模型/API 配置。

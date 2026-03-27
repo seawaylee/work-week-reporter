@@ -4,6 +4,9 @@ import json
 import openpyxl
 import os
 import sys
+import re
+import pathlib
+import shlex
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from copy import copy
 from datetime import datetime, timedelta
@@ -21,12 +24,7 @@ TXT_HEADERS = {
 TXT_BODY = 'board_id=20133&dataset_id=20609&cfg=%7B%22rows%22%3A%5B%7B%22columnName%22%3A%22from_dt%22%2C%22link%22%3Afalse%2C%22filterType%22%3A%22eq%22%2C%22values%22%3A%5B%5D%2C%22id%22%3A%225c12004a-2e41-4ca8-b221-703b61ac8337%22%2C%22alias%22%3A%22%E5%BC%80%E5%A7%8B%E6%97%A5%E6%9C%9F%22%7D%2C%7B%22columnName%22%3A%22to_dt%22%2C%22link%22%3Afalse%2C%22filterType%22%3A%22eq%22%2C%22values%22%3A%5B%5D%2C%22id%22%3A%22476cab63-266d-4d6b-b5b4-9655e655affc%22%2C%22alias%22%3A%22%E7%BB%93%E6%9D%9F%E6%97%A5%E6%9C%9F%22%7D%2C%7B%22columnName%22%3A%22profiletype%22%2C%22link%22%3Afalse%2C%22filterType%22%3A%22eq%22%2C%22values%22%3A%5B%5D%2C%22id%22%3A%225ec46a09-f07a-4f93-90d9-d9340a3ffcd8%22%2C%22alias%22%3A%22%E6%9C%8D%E5%8A%A1%E9%83%A8%E7%BD%B2%E7%B1%BB%E5%9E%8B%22%7D%2C%7B%22columnName%22%3A%22days%22%2C%22link%22%3Afalse%2C%22filterType%22%3A%22eq%22%2C%22values%22%3A%5B%5D%2C%22id%22%3A%22e8a15fbc-05d4-444c-b414-44e18f63c7fd%22%2C%22alias%22%3A%22%E5%A4%A9%E6%95%B0%22%7D%5D%2C%22columns%22%3A%5B%5D%2C%22filters%22%3A%5B%7B%22columnName%22%3A%22profiletype%22%2C%22filterType%22%3A%22%3D%22%2C%22values%22%3A%5B%5D%2C%22alias%22%3A%22profiletype%22%7D%5D%2C%22datalength%22%3A2000%2C%22values%22%3A%5B%7B%22column%22%3A%22median_sum%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2250%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22days%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2250%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22ninty_nine_sum%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2299%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22days%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2299%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22nine_nine_nine_sum%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2299.9%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22days%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%2299.9%E5%88%86%E4%BD%8D%E5%93%8D%E5%BA%94%E6%97%B6%E9%97%B4%28ms%29%22%7D%2C%7B%22column%22%3A%22count_sum%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%22%E5%B9%B3%E5%9D%87%E8%AF%B7%E6%B1%82%E6%95%B0%22%7D%2C%7B%22column%22%3A%22days%22%2C%22aggType%22%3A%22sum%22%2C%22alias%22%3A%22%E5%B9%B3%E5%9D%87%E8%AF%B7%E6%B1%82%E6%95%B0%22%7D%5D%7D&reload=true'
 
 GRAFANA_URL = os.getenv("GRAFANA_URL", "https://grafana-m0ymy2z9.grafana.tencent-cloud.com/api/datasources/proxy/1/api/v1/query_range")
-GRAFANA_HEADERS = {
-    'accept': 'application/json, text/plain, */*',
-    'content-type': 'application/x-www-form-urlencoded',
-    'cookie': os.getenv("GRAFANA_COOKIE", ""),
-    'x-grafana-org-id': os.getenv("GRAFANA_ORG_ID", "1")
-}
+ENV_FILE = os.getenv("ENV_FILE", ".env.local")
 
 # Optional: provide a custom encoded query template via env var for odin-interface.
 ODIN_GRAFANA_QUERY_TEMPLATE = os.getenv("ODIN_GRAFANA_QUERY_TEMPLATE", "")
@@ -62,8 +60,39 @@ GRAFANA_MAPPING = {
     'odin-focus': 'umab-odin-focus-interface',
     'odin-author': 'umab-odin-author-interface'
 }
+GRAFANA_SERVICE_NAMES = {name.lower() for name in GRAFANA_MAPPING}
 
 ANOMALY_FILL = PatternFill(start_color="FFF4CCCC", end_color="FFF4CCCC", fill_type="solid")
+WEEK_RANGE_PATTERN = re.compile(r"^\d{4}-\d{4}$")
+REPORT_FILE_PATTERN = re.compile(r"^周报(\d{4}-\d{2}-\d{2})\.xlsx$")
+
+
+def load_env_values(env_file):
+    env_path = pathlib.Path(env_file).expanduser()
+    if not env_path.exists():
+        return {}
+
+    values = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        values[key.strip()] = " ".join(shlex.split(raw_value, posix=True, comments=False))
+    return values
+
+
+def get_grafana_request_config(env_file=ENV_FILE):
+    env_values = load_env_values(env_file)
+    return (
+        env_values.get("GRAFANA_URL") or os.getenv("GRAFANA_URL", GRAFANA_URL),
+        {
+            'accept': 'application/json, text/plain, */*',
+            'content-type': 'application/x-www-form-urlencoded',
+            'cookie': env_values.get("GRAFANA_COOKIE", os.getenv("GRAFANA_COOKIE", "")),
+            'x-grafana-org-id': env_values.get("GRAFANA_ORG_ID", os.getenv("GRAFANA_ORG_ID", "1"))
+        },
+    )
 
 def fetch_txt_data():
     """从天象台 API 获取数据"""
@@ -85,11 +114,12 @@ def get_grafana_body(app_name, start_ts, end_ts):
         encoded_query = urllib.parse.quote(query)
         return f'query={encoded_query}&start={start_ts}&end={end_ts}&step=300'
 
-def fetch_grafana_data(app_name, start_ts, end_ts):
+def fetch_grafana_data(app_name, start_ts, end_ts, env_file=ENV_FILE):
     """从 Grafana API 获取数据 for specific app"""
     # print(f"Fetching Grafana data for {app_name}...")
     body = get_grafana_body(app_name, start_ts, end_ts)
-    response = requests.post(GRAFANA_URL, headers=GRAFANA_HEADERS, data=body, verify=False)
+    grafana_url, grafana_headers = get_grafana_request_config(env_file=env_file)
+    response = requests.post(grafana_url, headers=grafana_headers, data=body, verify=False)
     if response.status_code != 200:
         print(f"Grafana API Failed for {app_name}: {response.text}")
         try:
@@ -135,6 +165,25 @@ def write_qps_value(ws, row, col, qps_val):
     ws.cell(row=row, column=col).value = int(qps_val) if qps_val is not None else None
 
 
+def resolve_primary_metric_value(service_name, metrics, grafana_qps_map):
+    """Resolve top-block second-column metric: QPS for Odin, tp50 for Loki."""
+    service_key = str(service_name).strip().lower()
+
+    if service_key in GRAFANA_SERVICE_NAMES:
+        qps_val = grafana_qps_map.get(service_name)
+        if qps_val is None:
+            lower_map = {str(k).lower(): v for k, v in grafana_qps_map.items()}
+            qps_val = lower_map.get(service_key)
+        if qps_val is None:
+            return None, "grafana_qps_missing"
+        return int(qps_val), "grafana_qps"
+
+    p50_val = to_number(metrics.get("p50") if isinstance(metrics, dict) else None)
+    if p50_val is None:
+        return None, "p50_missing"
+    return int(p50_val), "p50"
+
+
 def to_number(value):
     if value is None:
         return None
@@ -169,7 +218,9 @@ def apply_anomaly_fill(cell, current_value, previous_value):
 
 def clear_annotation_cell(ws, row, col_start):
     # Column +5 is the note/reason column; always clear for newly written week.
-    ws.cell(row=row, column=col_start + 5).value = None
+    cell = ws.cell(row=row, column=col_start + 5)
+    cell.value = None
+    cell.comment = None
 
 def parse_txt_data(raw_data):
     """解析天象台数据为字典 {ProfileID: {DateStr: Metrics}}"""
@@ -202,6 +253,7 @@ def parse_txt_data(raw_data):
         req_key = next((k for k in row.keys() if k.startswith("count_sum")), None)
         p99_sum_key = next((k for k in row.keys() if k.startswith("ninty_nine_sum")), None)
         p999_sum_key = next((k for k in row.keys() if k.startswith("nine_nine_nine_sum")), None)
+        p50_sum_key = next((k for k in row.keys() if k.startswith("median_sum")), None)
         days_key = next((k for k in row.keys() if k.startswith("days") and k != "days_sum"), None)
 
         days = 1
@@ -211,6 +263,7 @@ def parse_txt_data(raw_data):
         reqs = int(row.get(req_key, 0)) if req_key else 0
         p99_sum = float(row.get(p99_sum_key, 0) or 0)
         p999_sum = float(row.get(p999_sum_key, 0) or 0)
+        p50_sum = float(row.get(p50_sum_key, 0) or 0)
 
         # Analysis of Excel History vs API:
         # odin-search Week 3: 68M (Excel) vs ~4.8亿 (API Total for 7 days) -> 4.8亿/7 = 68M
@@ -221,6 +274,7 @@ def parse_txt_data(raw_data):
         if pid not in data: data[pid] = {}
         data[pid][from_dt] = {
             "requests": avg_reqs, # FORCE Daily Average to match Excel magnitude
+            "p50": p50_sum / days if days else 0,
             "p99": p99_sum / days if days else 0,
             "p999": p999_sum / days if days else 0,
             "to_dt": to_dt,
@@ -287,13 +341,111 @@ def copy_style(src_cell, dst_cell):
         dst_cell.protection = copy(src_cell.protection)
         dst_cell.alignment = copy(src_cell.alignment)
 
+
+def copy_cell_state(src_cell, dst_cell):
+    """Copy full visible cell state for historical row rolling."""
+    dst_cell.value = src_cell.value
+    if src_cell.has_style:
+        dst_cell.font = copy(src_cell.font)
+        dst_cell.border = copy(src_cell.border)
+        dst_cell.fill = copy(src_cell.fill)
+        dst_cell.protection = copy(src_cell.protection)
+        dst_cell.alignment = copy(src_cell.alignment)
+        dst_cell.number_format = copy(src_cell.number_format)
+    dst_cell.comment = None
+    dst_cell.comment = copy(src_cell.comment) if src_cell.comment else None
+
+
+def collect_block_data_rows(ws, r_start, c_start, scan_limit=10):
+    """Collect contiguous data rows for one service block by row position only."""
+    data_rows = []
+    started = False
+    for i in range(scan_limit):
+        curr_r = r_start + i
+        val = ws.cell(row=curr_r, column=c_start).value
+        row_label = str(val).strip() if isinstance(val, str) else ""
+        is_data_row = bool(WEEK_RANGE_PATTERN.match(row_label))
+        if is_data_row:
+            data_rows.append(curr_r)
+            started = True
+            continue
+
+        # Once block data starts, a non-data row means next block or end.
+        if started:
+            break
+
+        if val is None and i > 0:
+            break
+
+    return data_rows
+
+
+def prepare_block_target_row(ws, r_start, c_start, data_col_count=6, min_rows_for_roll=4, scan_limit=10):
+    """
+    If rows < min_rows_for_roll, append at the next row.
+    If rows >= min_rows_for_roll, delete first row by shifting all following rows up.
+    Returns the row index where latest data should be written.
+    """
+    data_rows = collect_block_data_rows(ws, r_start, c_start, scan_limit=scan_limit)
+    if len(data_rows) < min_rows_for_roll:
+        return data_rows[-1] + 1 if data_rows else r_start
+
+    for idx in range(len(data_rows) - 1):
+        src_r = data_rows[idx + 1]
+        dst_r = data_rows[idx]
+        for offset in range(data_col_count):
+            copy_cell_state(
+                ws.cell(row=src_r, column=c_start + offset),
+                ws.cell(row=dst_r, column=c_start + offset),
+            )
+
+    return data_rows[-1]
+
+
+def choose_input_report_file(base_dir=".", today=None, fallback_file=INPUT_FILE):
+    """
+    Choose the latest weekly report strictly before `today`.
+    Fallback to `fallback_file` only when no prior weekly report exists.
+    """
+    base_path = pathlib.Path(base_dir)
+    today_date = today or datetime.now().date()
+
+    candidates = []
+    for path in base_path.iterdir():
+        if not path.is_file():
+            continue
+        match = REPORT_FILE_PATTERN.match(path.name)
+        if not match:
+            continue
+        try:
+            report_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if report_date < today_date:
+            candidates.append((report_date, path))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0])
+        return str(candidates[-1][1])
+
+    fallback_path = pathlib.Path(fallback_file)
+    if not fallback_path.is_absolute():
+        fallback_path = base_path / fallback_path
+    if fallback_path.exists():
+        return str(fallback_path)
+
+    raise FileNotFoundError(
+        f"No previous weekly report found before {today_date}, and fallback missing: {fallback_path}"
+    )
+
 def process_report():
     print("Starting Weekly Report Generation...")
+    _, grafana_headers = get_grafana_request_config()
 
     required = {
         "TXT_URL": TXT_URL,
         "TXT_COOKIE": TXT_HEADERS.get("Cookie", ""),
-        "GRAFANA_COOKIE": GRAFANA_HEADERS.get("cookie", "")
+        "GRAFANA_COOKIE": grafana_headers.get("cookie", "")
     }
     missing = [k for k, v in required.items() if not v]
     if missing:
@@ -312,9 +464,10 @@ def process_report():
 
     # 2. 加载 Excel
     try:
-        wb = openpyxl.load_workbook(INPUT_FILE)
+        input_file = choose_input_report_file(base_dir=".", today=datetime.now().date(), fallback_file=INPUT_FILE)
+        wb = openpyxl.load_workbook(input_file)
         ws = wb.active
-        print(f"Loaded Excel: {INPUT_FILE}")
+        print(f"Loaded Excel: {input_file}")
     except Exception as e:
         print(f"Error loading Excel: {e}")
         return 1
@@ -385,36 +538,14 @@ def process_report():
         r_start = block['row'] + 1
         c_start = block['col']
 
-        # 找到已有的数据行
-        data_rows = []
-        for i in range(10):
-            curr_r = r_start + i
-            val = ws.cell(row=curr_r, column=c_start).value
-            if val and isinstance(val, str) and "-" in val:
-                data_rows.append(curr_r)
-            elif not val and i > 0:
-                break
-
-        target_row_idx = -1
-
-        # 滚动逻辑：保留4行
-        if len(data_rows) < 4:
-            target_row_idx = data_rows[-1] + 1 if data_rows else r_start
-        else:
-            # 移动数据 (Row 2->1, 3->2, 4->3)
-            # 在移动数据的同时，我们需要保持样式。
-            # 通常每一行的样式是一样的，所以我们只需要把上一行的数据挪上来。
-            for k in range(3):
-                src_r = data_rows[k+1]
-                dst_r = data_rows[k]
-                for offset in range(6):
-                    dst_cell = ws.cell(row=dst_r, column=c_start+offset)
-                    src_cell = ws.cell(row=src_r, column=c_start+offset)
-                    dst_cell.value = src_cell.value
-                    # Don't strictly need to copy style here if rows are identical, but good safety
-                    # copy_style(src_cell, dst_cell)
-
-            target_row_idx = data_rows[3]
+        target_row_idx = prepare_block_target_row(
+            ws,
+            r_start=r_start,
+            c_start=c_start,
+            data_col_count=6,
+            min_rows_for_roll=4,
+            scan_limit=10,
+        )
 
         # 写入新数据
         # 重要的是：把上一行的样式复制给新的一行（因为新的一行可能是空的或者样式不同）
@@ -431,18 +562,18 @@ def process_report():
         # Update values
         ws.cell(row=target_row_idx, column=c_start).value = new_date_str
 
-        # Odin-series use Grafana QPS if available
-        # Check mapping for exact name, or lower case
-        qps_val = grafana_qps_map.get(name)
-        if qps_val is None:
-            # try lower
-             qps_val = grafana_qps_map.get(name.lower())
-
-        write_qps_value(ws, target_row_idx, c_start+1, qps_val)
-        prev_qps = ws.cell(row=prev_row_idx, column=c_start+1).value if prev_row_idx >= r_start else None
-        apply_anomaly_fill(ws.cell(row=target_row_idx, column=c_start+1), ws.cell(row=target_row_idx, column=c_start+1).value, prev_qps)
-        if qps_val is None and name in GRAFANA_MAPPING:
+        primary_metric_val, primary_metric_source = resolve_primary_metric_value(name, new_metrics, grafana_qps_map)
+        write_qps_value(ws, target_row_idx, c_start+1, primary_metric_val)
+        prev_primary_metric = ws.cell(row=prev_row_idx, column=c_start+1).value if prev_row_idx >= r_start else None
+        apply_anomaly_fill(
+            ws.cell(row=target_row_idx, column=c_start+1),
+            ws.cell(row=target_row_idx, column=c_start+1).value,
+            prev_primary_metric,
+        )
+        if primary_metric_source == "grafana_qps_missing":
             print(f"Warning: missing QPS for {name}; cleared QPS cell.")
+        elif primary_metric_source == "p50_missing":
+            print(f"Warning: missing tp50 for {name}; cleared tp50 cell.")
 
         # 核心逻辑修改：强制取整
         p99_val = int(new_metrics['p99'])

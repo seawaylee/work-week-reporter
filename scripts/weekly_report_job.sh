@@ -4,10 +4,11 @@
 
 set -u
 
-ROOT_DIR="/Users/NikoBelic/app/git/week-reporter"
+ROOT_DIR="/Users/NikoBelic/app/git/sohu-work/week-reporter"
 REPORT_SCRIPT="$ROOT_DIR/generate_weekly_report.py"
+REFRESH_GRAFANA_COOKIE_SCRIPT="$ROOT_DIR/scripts/refresh_grafana_cookie.py"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
-OPENCLAW_BIN="${OPENCLAW_BIN:-/Users/NikoBelic/.local/bin/openclaw}"
+OPENCLAW_BIN="${OPENCLAW_BIN:-/Users/NikoBelic/.volta/bin/openclaw}"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.local}"
 
 TARGET_AGENT="sohu"
@@ -61,8 +62,9 @@ build_message() {
   local status="$1"
   local report_file="$2"
   local delivered_file="$3"
-  local report_step="$4"
-  local copy_step="$5"
+  local refresh_step="$4"
+  local report_step="$5"
+  local copy_step="$6"
   cat <<EOF
 【${TASK_NAME}执行报告】
 执行ID: ${RUN_ID}
@@ -72,9 +74,10 @@ build_message() {
 执行结果: ${status}
 
 已执行任务:
-1) 运行周报脚本: ${report_step}
-2) 收集并复制Excel到agent收件区: ${copy_step}
-3) 发送本条执行报告到sohu agent
+1) 刷新Grafana Cookie: ${refresh_step}
+2) 运行周报脚本: ${report_step}
+3) 收集并复制Excel到agent收件区: ${copy_step}
+4) 发送本条执行报告到sohu agent
 
 产出物:
 - 文件规则: 仅允许投递当天文件（周报$(date '+%Y-%m-%d').xlsx）
@@ -103,10 +106,12 @@ notify_agent() {
 }
 
 job_status="SUCCESS"
+refresh_rc=0
 report_rc=0
 final_rc=0
 report_file=""
 delivered_file=""
+refresh_step_desc="未执行"
 report_step_desc="未执行"
 copy_step_desc="未执行"
 
@@ -114,53 +119,79 @@ log "===== Weekly report job started ====="
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   job_status="DRY_RUN"
+  refresh_step_desc="DRY_RUN（未执行）"
   report_step_desc="DRY_RUN（未执行）"
-  log "DRY_RUN=1, skip report generation."
+  log "DRY_RUN=1, skip Grafana cookie refresh and report generation."
 else
-  if [[ ! -f "$REPORT_SCRIPT" ]]; then
-    report_rc=127
-    job_status="FAILED:script_not_found"
-    report_step_desc="失败（脚本不存在）"
-    log "Report script not found: $REPORT_SCRIPT"
+  if [[ ! -f "$REFRESH_GRAFANA_COOKIE_SCRIPT" ]]; then
+    refresh_rc=127
+    job_status="FAILED:grafana_cookie_refresh_script_not_found"
+    refresh_step_desc="失败（脚本不存在）"
+    log "Grafana cookie refresh script not found: $REFRESH_GRAFANA_COOKIE_SCRIPT"
   else
-    log "Running report script: $REPORT_SCRIPT"
+    log "Refreshing Grafana cookie via: $REFRESH_GRAFANA_COOKIE_SCRIPT"
     (
       cd "$ROOT_DIR" || exit 1
-      "$PYTHON_BIN" "$REPORT_SCRIPT"
-    ) >>"$RUN_LOG" 2>&1 || report_rc=$?
+      "$PYTHON_BIN" "$REFRESH_GRAFANA_COOKIE_SCRIPT" --env-file "$ENV_FILE"
+    ) >>"$RUN_LOG" 2>&1 || refresh_rc=$?
 
-    if [[ "$report_rc" -ne 0 ]]; then
-      job_status="FAILED:report_exit_${report_rc}"
-      report_step_desc="失败（exit=${report_rc}）"
-      log "Report script failed with exit code: $report_rc"
+    if [[ "$refresh_rc" -ne 0 ]]; then
+      job_status="FAILED:grafana_cookie_refresh_exit_${refresh_rc}"
+      refresh_step_desc="失败（exit=${refresh_rc}）"
+      report_step_desc="失败（Grafana Cookie 刷新失败）"
+      log "Grafana cookie refresh failed with exit code: $refresh_rc"
     else
-      report_step_desc="成功"
-      log "Report script finished with exit code 0."
+      refresh_step_desc="成功"
+      log "Grafana cookie refresh finished with exit code 0."
     fi
   fi
 
-  report_file="$(find_today_report_file || true)"
-  if [[ -n "$report_file" && -f "$report_file" ]]; then
-    log "Found report file: $report_file"
-    delivered_file="$(copy_for_agent "$report_file" "$TARGET_DROP_DIR" 2>>"$RUN_LOG" || true)"
-    if [[ -n "$delivered_file" ]]; then
-      copy_step_desc="成功"
-      log "Copied report to agent workspace: $delivered_file"
+  if [[ "$refresh_rc" -eq 0 ]]; then
+    if [[ ! -f "$REPORT_SCRIPT" ]]; then
+      report_rc=127
+      job_status="FAILED:script_not_found"
+      report_step_desc="失败（脚本不存在）"
+      log "Report script not found: $REPORT_SCRIPT"
     else
-      copy_step_desc="失败（复制失败）"
-      log "Failed to copy report to agent workspace."
+      log "Running report script: $REPORT_SCRIPT"
+      (
+        cd "$ROOT_DIR" || exit 1
+        "$PYTHON_BIN" "$REPORT_SCRIPT"
+      ) >>"$RUN_LOG" 2>&1 || report_rc=$?
+
+      if [[ "$report_rc" -ne 0 ]]; then
+        job_status="FAILED:report_exit_${report_rc}"
+        report_step_desc="失败（exit=${report_rc}）"
+        log "Report script failed with exit code: $report_rc"
+      else
+        report_step_desc="成功"
+        log "Report script finished with exit code 0."
+      fi
     fi
-  else
-    copy_step_desc="失败（未找到当天周报文件）"
-    log "No today report file found: 周报$(date '+%Y-%m-%d').xlsx"
-    if [[ "$job_status" == "SUCCESS" ]]; then
-      job_status="FAILED:no_report_file"
+
+    report_file="$(find_today_report_file || true)"
+    if [[ -n "$report_file" && -f "$report_file" ]]; then
+      log "Found report file: $report_file"
+      delivered_file="$(copy_for_agent "$report_file" "$TARGET_DROP_DIR" 2>>"$RUN_LOG" || true)"
+      if [[ -n "$delivered_file" ]]; then
+        copy_step_desc="成功"
+        log "Copied report to agent workspace: $delivered_file"
+      else
+        copy_step_desc="失败（复制失败）"
+        log "Failed to copy report to agent workspace."
+      fi
+    else
+      copy_step_desc="失败（未找到当天周报文件）"
+      log "No today report file found: 周报$(date '+%Y-%m-%d').xlsx"
+      if [[ "$job_status" == "SUCCESS" ]]; then
+        job_status="FAILED:no_report_file"
+      fi
     fi
   fi
 fi
 
 notify_ok=1
-primary_message="$(build_message "$job_status" "$report_file" "$delivered_file" "$report_step_desc" "$copy_step_desc")"
+primary_message="$(build_message "$job_status" "$report_file" "$delivered_file" "$refresh_step_desc" "$report_step_desc" "$copy_step_desc")"
 agent_prompt="$(build_agent_prompt "$primary_message")"
 
 # First try visible delivery to chat channel. If it fails, fall back to local run.
@@ -181,7 +212,9 @@ else
   fi
 fi
 
-if [[ "$report_rc" -ne 0 ]]; then
+if [[ "$refresh_rc" -ne 0 ]]; then
+  final_rc="$refresh_rc"
+elif [[ "$report_rc" -ne 0 ]]; then
   final_rc="$report_rc"
 elif [[ "$job_status" == "FAILED:no_report_file" ]]; then
   final_rc=3

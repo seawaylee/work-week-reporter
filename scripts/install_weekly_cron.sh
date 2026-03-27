@@ -2,11 +2,11 @@
 
 set -euo pipefail
 
-ROOT_DIR="/Users/NikoBelic/app/git/week-reporter"
+ROOT_DIR="/Users/NikoBelic/app/git/sohu-work/week-reporter"
 JOB_SCRIPT="$ROOT_DIR/scripts/weekly_report_job.sh"
 LOG_DIR="$ROOT_DIR/logs"
 CRON_LOG="$LOG_DIR/weekly_report_cron.log"
-CRON_EXPR="30 9 * * 5"
+CRON_EXPR="0 9 * * 5"
 CRON_LINE="$CRON_EXPR $JOB_SCRIPT >> $CRON_LOG 2>&1"
 
 mkdir -p "$LOG_DIR"

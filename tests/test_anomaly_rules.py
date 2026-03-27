@@ -3,6 +3,7 @@ import sys
 import unittest
 
 import openpyxl
+from openpyxl.comments import Comment
 from openpyxl.styles import PatternFill
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -39,8 +40,10 @@ class AnomalyRulesTests(unittest.TestCase):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.cell(row=4, column=6).value = "用户推荐0点爆量"
+        ws.cell(row=4, column=6).comment = Comment("历史备注", "tester")
         gwr.clear_annotation_cell(ws, 4, 1)
         self.assertIsNone(ws.cell(row=4, column=6).value)
+        self.assertIsNone(ws.cell(row=4, column=6).comment)
 
 
 if __name__ == "__main__":
