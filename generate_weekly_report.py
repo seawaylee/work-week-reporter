@@ -380,13 +380,27 @@ def collect_block_data_rows(ws, r_start, c_start, scan_limit=10):
     return data_rows
 
 
-def prepare_block_target_row(ws, r_start, c_start, data_col_count=6, min_rows_for_roll=4, scan_limit=10):
+def prepare_block_target_row(
+    ws,
+    r_start,
+    c_start,
+    data_col_count=6,
+    min_rows_for_roll=4,
+    scan_limit=10,
+    new_date_str=None,
+):
     """
     If rows < min_rows_for_roll, append at the next row.
     If rows >= min_rows_for_roll, delete first row by shifting all following rows up.
+    If the latest row already matches `new_date_str`, update that row in place.
     Returns the row index where latest data should be written.
     """
     data_rows = collect_block_data_rows(ws, r_start, c_start, scan_limit=scan_limit)
+    if data_rows and new_date_str:
+        last_row = data_rows[-1]
+        if ws.cell(row=last_row, column=c_start).value == new_date_str:
+            return last_row
+
     if len(data_rows) < min_rows_for_roll:
         return data_rows[-1] + 1 if data_rows else r_start
 
@@ -404,8 +418,8 @@ def prepare_block_target_row(ws, r_start, c_start, data_col_count=6, min_rows_fo
 
 def choose_input_report_file(base_dir=".", today=None, fallback_file=INPUT_FILE):
     """
-    Choose the latest weekly report strictly before `today`.
-    Fallback to `fallback_file` only when no prior weekly report exists.
+    Choose the latest weekly report on or before `today`.
+    Fallback to `fallback_file` only when no candidate report exists.
     """
     base_path = pathlib.Path(base_dir)
     today_date = today or datetime.now().date()
@@ -421,7 +435,7 @@ def choose_input_report_file(base_dir=".", today=None, fallback_file=INPUT_FILE)
             report_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
         except Exception:
             continue
-        if report_date < today_date:
+        if report_date <= today_date:
             candidates.append((report_date, path))
 
     if candidates:
@@ -435,7 +449,7 @@ def choose_input_report_file(base_dir=".", today=None, fallback_file=INPUT_FILE)
         return str(fallback_path)
 
     raise FileNotFoundError(
-        f"No previous weekly report found before {today_date}, and fallback missing: {fallback_path}"
+        f"No weekly report found on or before {today_date}, and fallback missing: {fallback_path}"
     )
 
 def process_report():
@@ -545,6 +559,7 @@ def process_report():
             data_col_count=6,
             min_rows_for_roll=4,
             scan_limit=10,
+            new_date_str=new_date_str,
         )
 
         # 写入新数据

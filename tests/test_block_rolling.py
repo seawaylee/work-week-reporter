@@ -80,6 +80,40 @@ class BlockRollingTests(unittest.TestCase):
         self.assertEqual(ws.cell(row=3, column=6).comment.text, "comment-note-c")
         self.assertEqual(ws.cell(row=4, column=6).comment.text, "comment-note-d")
 
+    def test_prepare_block_target_row_reuses_existing_current_week_row_without_rolling(self):
+        ws = self._new_ws()
+        ws.cell(row=1, column=1).value = "odin"
+        ws.cell(row=1, column=2).value = "峰值QPS"
+
+        for row, label, note in [
+            (2, "0327-0402", "note-a"),
+            (3, "0403-0409", "note-b"),
+            (4, "0410-0416", "note-c"),
+            (5, "0417-0423", "note-d"),
+        ]:
+            ws.cell(row=row, column=1).value = label
+            ws.cell(row=row, column=6).value = note
+
+        target_row = gwr.prepare_block_target_row(
+            ws,
+            r_start=2,
+            c_start=1,
+            data_col_count=6,
+            min_rows_for_roll=4,
+            scan_limit=10,
+            new_date_str="0417-0423",
+        )
+
+        self.assertEqual(target_row, 5)
+        self.assertEqual(ws.cell(row=2, column=1).value, "0327-0402")
+        self.assertEqual(ws.cell(row=3, column=1).value, "0403-0409")
+        self.assertEqual(ws.cell(row=4, column=1).value, "0410-0416")
+        self.assertEqual(ws.cell(row=5, column=1).value, "0417-0423")
+        self.assertEqual(ws.cell(row=2, column=6).value, "note-a")
+        self.assertEqual(ws.cell(row=3, column=6).value, "note-b")
+        self.assertEqual(ws.cell(row=4, column=6).value, "note-c")
+        self.assertEqual(ws.cell(row=5, column=6).value, "note-d")
+
     def test_prepare_block_target_row_append_does_not_copy_historical_comment_to_new_row(self):
         ws = self._new_ws()
         ws.cell(row=1, column=1).value = "odin"
